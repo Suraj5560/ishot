@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment Variables & Secrets (CRITICAL: Never commit .env files)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*/.env
+*.env
+!.env.example
+!*/.env.example
+
+# Production & Build Outputs
+dist/
+*/dist/
+build/
+*/build/
+
+# Logs & Debugging
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Watcher Local Files & Screenshots
+watcher/screenshots/*
+!watcher/screenshots/.gitkeep
+watcher/temp_watch/
+
+# Editor & OS Metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.sublime-workspace
+*.swp
+*.swo
+
+# Temporary Files
+.tmp/
+tmp/
+*.tmp

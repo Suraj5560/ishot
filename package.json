@@ -1,0 +1,16 @@
+{
+  "name": "ishot",
+  "version": "1.0.0",
+  "description": "ishot - Searchable Screenshot Library using Cloudinary OCR & AI",
+  "scripts": {
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev",
+    "watcher": "npm --prefix watcher start",
+    "seed": "npm --prefix server run seed",
+    "test:server": "npm --prefix server test",
+    "build:client": "npm --prefix client run build"
+  },
+  "keywords": ["cloudinary", "ocr", "search", "screenshots", "mongodb", "react", "tailwind"],
+  "author": "",
+  "license": "MIT"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "ishot-watcher",
+  "version": "1.0.0",
+  "description": "Folder watcher for ishot that auto-uploads new screenshots to the ishot API",
+  "main": "watch.js",
+  "scripts": {
+    "start": "node watch.js",
+    "dev": "nodemon watch.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "chokidar": "^4.0.3",
+    "dotenv": "^16.4.7",
+    "form-data": "^4.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
