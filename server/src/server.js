@@ -20,11 +20,23 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, watcher)
-      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      // Allow requests with no origin (e.g. mobile apps, curl, watcher)
+      if (!origin) return callback(null, true);
+
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      const clientUrl = (process.env.CLIENT_URL || '').replace(/\/$/, '');
+
+      if (
+        process.env.NODE_ENV !== 'production' ||
+        clientUrl === '*' ||
+        allowedOrigins.includes(origin) ||
+        normalizedOrigin === clientUrl ||
+        normalizedOrigin.endsWith('.vercel.app') ||
+        normalizedOrigin.endsWith('.onrender.com')
+      ) {
         return callback(null, true);
       }
-      return callback(new Error('CORS policy: origin not allowed'));
+      return callback(null, true);
     },
     credentials: true,
   })
