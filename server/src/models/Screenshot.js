@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const ScreenshotSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
     publicId: {
       type: String,
       required: true,
@@ -34,7 +40,6 @@ const ScreenshotSchema = new mongoose.Schema(
     fileHash: {
       type: String,
       required: true,
-      index: true,
     },
     width: {
       type: Number,
@@ -76,8 +81,9 @@ ScreenshotSchema.index(
   }
 );
 
-// Secondary indexes for sorting and filtering
-ScreenshotSchema.index({ createdAt: -1 });
-ScreenshotSchema.index({ category: 1, createdAt: -1 });
+// Per-user indexes for isolation, duplicate detection, and fast sorting
+ScreenshotSchema.index({ userId: 1, fileHash: 1 });
+ScreenshotSchema.index({ userId: 1, createdAt: -1 });
+ScreenshotSchema.index({ userId: 1, category: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Screenshot', ScreenshotSchema);

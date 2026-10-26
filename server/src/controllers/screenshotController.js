@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const Screenshot = require('../models/Screenshot');
 const { uploadToCloudinary, deleteFromCloudinary } = require('../services/cloudinaryService');
 const { analyzeScreenshotWithGemini } = require('../services/geminiService');
@@ -12,7 +13,8 @@ function escapeRegex(text) {
 
 /**
  * POST /api/upload
- * Handles screenshot upload to Cloudinary and Gemini Flash vision analysis.
+ * Handles screenshot upload with quota enforcement, per-user deduplication,
+ * Cloudinary per-user folder upload, and Gemini Flash vision analysis.
  */
 async function uploadScreenshot(req, res, next) {
   try {
@@ -23,13 +25,27 @@ async function uploadScreenshot(req, res, next) {
       });
     }
 
+    const userId = req.user.id;
+    const maxUploads = parseInt(process.env.MAX_UPLOADS_PER_USER, 10) || 25;
+
+    // 1. Quota check: ensure user has not exceeded max uploads limit
+    const currentCount = await Screenshot.countDocuments({ userId });
+    if (currentCount >= maxUploads) {
+      return res.status(429).json({
+        success: false,
+        error: `Upload limit reached. You can store up to ${maxUploads} screenshots. Please delete older screenshots to upload new ones.`,
+        limit: maxUploads,
+        current: currentCount,
+      });
+    }
+
     const buffer = req.file.buffer;
 
-    // 1. Compute SHA-256 hash to detect duplicates
+    // 2. Compute SHA-256 hash to detect duplicates per user
     const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-    // 2. Check if this file was already uploaded
-    const existing = await Screenshot.findOne({ fileHash });
+    // 3. Check if THIS user already uploaded this file
+    const existing = await Screenshot.findOne({ userId, fileHash });
     if (existing) {
       const snippet = generateSnippet(existing);
       return res.status(200).json({
@@ -43,16 +59,17 @@ async function uploadScreenshot(req, res, next) {
       });
     }
 
-    // 3. Plain upload to Cloudinary (storage & CDN delivery)
-    const cloudinaryData = await uploadToCloudinary(buffer);
+    // 4. Plain upload to Cloudinary in per-user folder (findshot/<userId>)
+    const userFolder = `findshot/${userId}`;
+    const cloudinaryData = await uploadToCloudinary(buffer, { folder: userFolder });
 
-    // 4. Send image bytes to Gemini Flash for OCR, captioning, tags, category & sensitive check
+    // 5. Send image bytes to Gemini Flash for OCR, captioning, tags, category & sensitive check
     const geminiData = await analyzeScreenshotWithGemini(
       buffer,
       req.file.mimetype || 'image/png'
     );
 
-    // 5. Category fallback: use keyword rules if Gemini left category empty or 'Other'
+    // 6. Category fallback: use keyword rules if Gemini left category empty or 'Other'
     let finalCategory = geminiData.category || 'Other';
     if ((!geminiData.category || geminiData.category === 'Other') && geminiData.ocrText) {
       const keywordCategory = categorizeScreenshot(geminiData.ocrText, geminiData.tags);
@@ -61,8 +78,9 @@ async function uploadScreenshot(req, res, next) {
       }
     }
 
-    // 6. Save to MongoDB
+    // 7. Save to MongoDB strictly bound to req.user.id
     const screenshot = await Screenshot.create({
+      userId,
       publicId: cloudinaryData.publicId,
       url: cloudinaryData.url,
       ocrText: geminiData.ocrText || '',
@@ -94,11 +112,12 @@ async function uploadScreenshot(req, res, next) {
 }
 
 /**
- * GET /api/search?q=&tag=&category=&from=&to=&page=&limit=
- * Search across ocrText, caption and tags with text index + regex fallback.
+ * GET /api/search?q=&tag=&category=&from=&to=&sensitive=&page=&limit=
+ * Search across ocrText, caption and tags strictly scoped to the authenticated user.
  */
 async function searchScreenshots(req, res, next) {
   try {
+    const userId = req.user.id;
     const {
       q = '',
       tag = '',
@@ -114,7 +133,8 @@ async function searchScreenshots(req, res, next) {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 12));
     const skip = (pageNum - 1) * limitNum;
 
-    const baseFilter = {};
+    // Enforce user isolation on all searches
+    const baseFilter = { userId };
 
     // Filter by category
     if (category && category !== 'All') {
@@ -153,7 +173,7 @@ async function searchScreenshots(req, res, next) {
     const searchQuery = q.trim();
 
     if (searchQuery) {
-      // Step A: Attempt MongoDB text index search first
+      // Step A: Attempt MongoDB text index search scoped to user
       try {
         const textFilter = {
           ...baseFilter,
@@ -167,7 +187,7 @@ async function searchScreenshots(req, res, next) {
           sort = { score: { $meta: 'textScore' }, createdAt: -1 };
           useTextScore = true;
         } else {
-          // Fallback to regex if text search yielded 0 results (handles partial words, symbols, codes)
+          // Fallback to regex if text search yielded 0 results (handles partial words, codes)
           const escaped = escapeRegex(searchQuery);
           const regex = new RegExp(escaped, 'i');
           queryFilter = {
@@ -180,7 +200,6 @@ async function searchScreenshots(req, res, next) {
           };
         }
       } catch (textErr) {
-        // If text index not ready or error, fallback to regex
         const escaped = escapeRegex(searchQuery);
         const regex = new RegExp(escaped, 'i');
         queryFilter = {
@@ -210,7 +229,6 @@ async function searchScreenshots(req, res, next) {
       Screenshot.countDocuments(queryFilter),
     ]);
 
-    // Attach contextual snippet with highlighted keywords
     const enrichedResults = screenshots.map((item) => ({
       ...item,
       snippet: generateSnippet(item, searchQuery),
@@ -232,10 +250,11 @@ async function searchScreenshots(req, res, next) {
 
 /**
  * GET /api/screenshots
- * Get paginated list of screenshots (latest first).
+ * Get paginated list of screenshots for the current authenticated user (latest first).
  */
 async function getAllScreenshots(req, res, next) {
   try {
+    const userId = req.user.id;
     const {
       page = 1,
       limit = 12,
@@ -247,7 +266,7 @@ async function getAllScreenshots(req, res, next) {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 12));
     const skip = (pageNum - 1) * limitNum;
 
-    const filter = {};
+    const filter = { userId };
     if (category && category !== 'All') {
       filter.category = category;
     }
@@ -284,19 +303,20 @@ async function getAllScreenshots(req, res, next) {
 
 /**
  * GET /api/screenshots/:id
- * Get single screenshot details by ID.
+ * Get single screenshot details by ID, strictly verifying ownership.
  */
 async function getScreenshotById(req, res, next) {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
     let screenshot = null;
 
     if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      screenshot = await Screenshot.findById(id).lean();
+      screenshot = await Screenshot.findOne({ _id: id, userId }).lean();
     }
 
     if (!screenshot) {
-      screenshot = await Screenshot.findOne({ publicId: id }).lean();
+      screenshot = await Screenshot.findOne({ publicId: id, userId }).lean();
     }
 
     if (!screenshot) {
@@ -320,19 +340,20 @@ async function getScreenshotById(req, res, next) {
 
 /**
  * DELETE /api/screenshots/:id
- * Delete from Cloudinary and MongoDB.
+ * Delete from Cloudinary and MongoDB ONLY if it belongs to the authenticated user.
  */
 async function deleteScreenshot(req, res, next) {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
     let screenshot = null;
 
     if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      screenshot = await Screenshot.findById(id);
+      screenshot = await Screenshot.findOne({ _id: id, userId });
     }
 
     if (!screenshot) {
-      screenshot = await Screenshot.findOne({ publicId: id });
+      screenshot = await Screenshot.findOne({ publicId: id, userId });
     }
 
     if (!screenshot) {
@@ -352,7 +373,7 @@ async function deleteScreenshot(req, res, next) {
     }
 
     // 2. Delete from MongoDB
-    await Screenshot.findByIdAndDelete(screenshot._id);
+    await Screenshot.deleteOne({ _id: screenshot._id, userId });
 
     res.json({
       success: true,
@@ -366,13 +387,18 @@ async function deleteScreenshot(req, res, next) {
 
 /**
  * GET /api/stats
- * Summary stats: total count, count by category, popular tags.
+ * Summary stats: total count, max uploads cap, count by category, popular tags strictly for the current user.
  */
 async function getStats(req, res, next) {
   try {
-    const total = await Screenshot.countDocuments();
+    const userId = req.user.id;
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const maxUploads = parseInt(process.env.MAX_UPLOADS_PER_USER, 10) || 25;
+
+    const total = await Screenshot.countDocuments({ userId });
 
     const categoryAggregation = await Screenshot.aggregate([
+      { $match: { userId: userObjectId } },
       { $group: { _id: '$category', count: { $sum: 1 } } },
     ]);
 
@@ -392,8 +418,9 @@ async function getStats(req, res, next) {
       }
     });
 
-    // Top tags aggregation
+    // Top tags aggregation for this user
     const tagAggregation = await Screenshot.aggregate([
+      { $match: { userId: userObjectId } },
       { $unwind: '$tags' },
       { $group: { _id: '$tags', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
@@ -401,11 +428,12 @@ async function getStats(req, res, next) {
     ]);
 
     const tags = tagAggregation.map((t) => ({ tag: t._id, count: t.count }));
-    const sensitiveCount = await Screenshot.countDocuments({ hasSensitiveData: true });
+    const sensitiveCount = await Screenshot.countDocuments({ userId, hasSensitiveData: true });
 
     res.json({
       success: true,
       total,
+      maxUploads,
       categories,
       tags,
       sensitiveCount,

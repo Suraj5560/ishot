@@ -1,21 +1,29 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { connectDB } = require('./config/db');
+const authRoutes = require('./routes/authRoutes');
 const screenshotRoutes = require('./routes/screenshotRoutes');
+const { generalLimiter } = require('./middleware/rateLimiter');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS configuration
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  process.env.CLIENT_URL,
-].filter(Boolean);
+// Security Headers with Helmet
+app.use(helmet());
+
+// CORS configuration based on CLIENT_ORIGINS from .env
+const clientOriginsRaw =
+  process.env.CLIENT_ORIGINS ||
+  process.env.CLIENT_URL ||
+  'http://localhost:5173,http://127.0.0.1:5173,https://ishot.vercel.app';
+
+const allowedOrigins = clientOriginsRaw
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 
 app.use(
   cors({
@@ -24,28 +32,26 @@ app.use(
       if (!origin) return callback(null, true);
 
       const normalizedOrigin = origin.replace(/\/$/, '');
-      const clientUrl = (process.env.CLIENT_URL || '').replace(/\/$/, '');
 
       if (
-        process.env.NODE_ENV !== 'production' ||
-        clientUrl === '*' ||
-        allowedOrigins.includes(origin) ||
-        normalizedOrigin === clientUrl ||
-        normalizedOrigin.endsWith('.vercel.app') ||
-        normalizedOrigin.endsWith('.onrender.com')
+        allowedOrigins.includes(normalizedOrigin) ||
+        process.env.NODE_ENV !== 'production'
       ) {
         return callback(null, true);
       }
-      return callback(null, true);
+      return callback(new Error('CORS policy: origin not allowed'));
     },
     credentials: true,
   })
 );
 
+// General rate limiter on all /api routes
+app.use('/api', generalLimiter);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check endpoint
+// Health check endpoint (Public)
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -54,10 +60,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Main API routes
+// Authentication routes (Public: /register, /login; Authenticated: /me)
+app.use('/api/auth', authRoutes);
+
+// Screenshot library routes (Protected with authMiddleware)
 app.use('/api', screenshotRoutes);
 
-// 404 & Error middleware
+// 404 & Centralized Error middleware
 app.use(notFoundHandler);
 app.use(errorHandler);
 

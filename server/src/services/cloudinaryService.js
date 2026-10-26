@@ -12,8 +12,9 @@ const { cloudinary, isConfigured, defaultFolder } = require('../config/cloudinar
 async function uploadToCloudinary(buffer, options = {}) {
   if (!isConfigured) {
     console.warn('⚠️ [Cloudinary] Credentials missing. Operating in offline/simulated mode.');
+    const targetFolder = options.folder || defaultFolder;
     return {
-      publicId: `findshot/local_${Date.now()}`,
+      publicId: `${targetFolder}/local_${Date.now()}`,
       url: `data:image/png;base64,${buffer.toString('base64').slice(0, 100)}...`,
       width: 800,
       height: 600,

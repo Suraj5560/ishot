@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const upload = require('../middleware/uploadMiddleware');
 const screenshotController = require('../controllers/screenshotController');
+const authMiddleware = require('../middleware/authMiddleware');
+const { uploadLimiter } = require('../middleware/rateLimiter');
 
 // Normalize req.file from either 'file' or 'image' field
 const handleFileUpload = (req, res, next) => {
@@ -19,8 +21,11 @@ const handleFileUpload = (req, res, next) => {
   });
 };
 
+// Protect all screenshot routes with JWT authentication
+router.use(authMiddleware);
+
 // Routes
-router.post('/upload', handleFileUpload, screenshotController.uploadScreenshot);
+router.post('/upload', uploadLimiter, handleFileUpload, screenshotController.uploadScreenshot);
 router.get('/search', screenshotController.searchScreenshots);
 router.get('/screenshots', screenshotController.getAllScreenshots);
 router.get('/screenshots/:id', screenshotController.getScreenshotById);
