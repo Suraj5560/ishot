@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { UploadCloud, CheckCircle2, AlertCircle, X, FileImage, Loader2 } from 'lucide-react';
 import { uploadScreenshotApi } from '../services/api';
 
-export function UploadDropzone({ onUploadSuccess, onClose, isOpen }) {
+export function UploadDropzone({ onUploadSuccess, onUploadError, onClose, isOpen }) {
   const [isDragging, setIsDragging] = useState(false);
   const [uploadQueue, setUploadQueue] = useState([]);
   const fileInputRef = useRef(null);
@@ -92,13 +92,18 @@ export function UploadDropzone({ onUploadSuccess, onClose, isOpen }) {
         onUploadSuccess(response);
       }
     } catch (err) {
+      const errorMsg = err.message || 'Upload failed';
       setUploadQueue((prev) =>
         prev.map((it) =>
           it.id === item.id
-            ? { ...it, status: 'error', error: err.message || 'Upload failed' }
+            ? { ...it, status: 'error', error: errorMsg }
             : it
         )
       );
+
+      if (onUploadError) {
+        onUploadError(errorMsg);
+      }
     }
   };
 
@@ -173,7 +178,7 @@ export function UploadDropzone({ onUploadSuccess, onClose, isOpen }) {
               or drag & drop your screenshots here
             </p>
             <p className="text-xs text-slate-400 dark:text-slate-500">
-              Supports PNG, JPG, WEBP, GIF up to 20MB (multiple files allowed)
+              Supports PNG, JPG, WEBP, GIF up to 20MB &bull; Max 25 screenshots per user
             </p>
           </div>
         </div>
@@ -227,9 +232,9 @@ export function UploadDropzone({ onUploadSuccess, onClose, isOpen }) {
                   )}
 
                   {item.status === 'error' && (
-                    <div className="flex items-center space-x-1 text-rose-600 dark:text-rose-400 font-medium">
-                      <AlertCircle className="w-4 h-4" />
-                      <span className="truncate max-w-[140px]">{item.error}</span>
+                    <div className="flex items-center space-x-1 text-rose-600 dark:text-rose-400 font-medium" title={item.error}>
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span className="truncate max-w-[200px]">{item.error}</span>
                     </div>
                   )}
                 </div>

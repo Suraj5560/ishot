@@ -1,15 +1,132 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  '/api'
+).replace(/\/$/, '');
+
+export const TOKEN_STORAGE_KEY = 'ishot_token';
+
+export function getStoredToken() {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch (e) {
+    return null;
+  }
+}
+
+export function setStoredToken(token) {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.error('Failed to set stored token:', e);
+  }
+}
+
+export function removeStoredToken() {
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch (e) {
+    console.error('Failed to remove stored token:', e);
+  }
+}
+
+function handleAuthError() {
+  removeStoredToken();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ishot:unauthorized'));
+  }
+}
+
+function getAuthHeaders(extraHeaders = {}) {
+  const token = getStoredToken();
+  const headers = { ...extraHeaders };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 /**
- * Upload an image file with optional progress tracking.
+ * Universal JSON request wrapper handling Bearer token, 401 auto-logout, and 429 quota errors.
+ */
+async function request(endpoint, options = {}) {
+  const headers = getAuthHeaders(options.headers || {});
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers,
+  });
+
+  if (res.status === 401) {
+    handleAuthError();
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Session expired or unauthenticated. Please log in again.');
+  }
+
+  if (res.status === 429) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Upload limit reached (max 25 screenshots per user).');
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Request failed with status ${res.status}`);
+  }
+  return data;
+}
+
+/**
+ * Authentication APIs
+ */
+export async function registerApi({ email, password }) {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Registration failed with status ${res.status}`);
+  }
+  return data;
+}
+
+export async function loginApi({ email, password }) {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `Login failed with status ${res.status}`);
+  }
+  return data;
+}
+
+export async function getMeApi() {
+  return request('/auth/me');
+}
+
+/**
+ * Upload an image file with optional progress tracking and per-user token.
  */
 export async function uploadScreenshotApi(file, onProgress) {
   const formData = new FormData();
   formData.append('file', file);
 
+  const token = getStoredToken();
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${API_BASE}/upload`);
+
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
 
     if (xhr.upload && onProgress) {
       xhr.upload.onprogress = (event) => {
@@ -23,6 +140,15 @@ export async function uploadScreenshotApi(file, onProgress) {
     xhr.onload = () => {
       try {
         const json = JSON.parse(xhr.responseText);
+        if (xhr.status === 401) {
+          handleAuthError();
+          reject(new Error(json.error || 'Session expired. Please log in again.'));
+          return;
+        }
+        if (xhr.status === 429) {
+          reject(new Error(json.error || 'Upload limit reached (max 25 screenshots per user).'));
+          return;
+        }
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(json);
         } else {
@@ -54,12 +180,7 @@ export async function searchScreenshotsApi(params = {}) {
   if (params.page) query.set('page', params.page);
   if (params.limit) query.set('limit', params.limit);
 
-  const res = await fetch(`${API_BASE}/search?${query.toString()}`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Search failed with status ${res.status}`);
-  }
-  return res.json();
+  return request(`/search?${query.toString()}`);
 }
 
 /**
@@ -72,48 +193,28 @@ export async function getScreenshotsApi(params = {}) {
   if (params.category && params.category !== 'All') query.set('category', params.category);
   if (params.tag) query.set('tag', params.tag);
 
-  const res = await fetch(`${API_BASE}/screenshots?${query.toString()}`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to fetch screenshots: ${res.status}`);
-  }
-  return res.json();
+  return request(`/screenshots?${query.toString()}`);
 }
 
 /**
  * Get single screenshot by ID.
  */
 export async function getScreenshotByIdApi(id) {
-  const res = await fetch(`${API_BASE}/screenshots/${id}`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to fetch screenshot: ${res.status}`);
-  }
-  return res.json();
+  return request(`/screenshots/${id}`);
 }
 
 /**
  * Delete screenshot by ID from Cloudinary and DB.
  */
 export async function deleteScreenshotApi(id) {
-  const res = await fetch(`${API_BASE}/screenshots/${id}`, {
+  return request(`/screenshots/${id}`, {
     method: 'DELETE',
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Delete failed with status ${res.status}`);
-  }
-  return res.json();
 }
 
 /**
- * Get library stats (category counts, top tags, total).
+ * Get library stats (category counts, top tags, total, maxUploads).
  */
 export async function getStatsApi() {
-  const res = await fetch(`${API_BASE}/stats`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to fetch stats: ${res.status}`);
-  }
-  return res.json();
+  return request('/stats');
 }

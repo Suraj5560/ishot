@@ -6,13 +6,18 @@ import { UploadDropzone } from './components/UploadDropzone';
 import { ScreenshotGrid } from './components/ScreenshotGrid';
 import { PreviewModal } from './components/PreviewModal';
 import { ToastContainer } from './components/Toast';
+import { AuthPage } from './components/AuthPage';
+import { useAuth } from './context/AuthContext';
 import {
   searchScreenshotsApi,
   deleteScreenshotApi,
   getStatsApi,
 } from './services/api';
+import { Loader2 } from 'lucide-react';
 
 export function App() {
+  const { user, isAuthenticated, isLoading: isAuthLoading, logout } = useAuth();
+
   // Search state
   const [searchInput, setSearchInput] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -28,13 +33,14 @@ export function App() {
   const [screenshots, setScreenshots] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Stats state
   const [stats, setStats] = useState({
     total: 0,
     categories: {},
     tags: [],
+    maxUploads: 25,
   });
 
   // UI state
@@ -56,11 +62,27 @@ export function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // 300ms Debounce for instant search input
+  // Clear all cached screenshot state on logout
+  const handleLogout = useCallback(() => {
+    setScreenshots([]);
+    setTotalCount(0);
+    setTotalPages(1);
+    setSearchInput('');
+    setDebouncedQuery('');
+    setSelectedCategory('All');
+    setSelectedTag('');
+    setDateFrom('');
+    setDateTo('');
+    setStats({ total: 0, categories: {}, tags: [], maxUploads: 25 });
+    setActiveScreenshot(null);
+    setIsUploadOpen(false);
+  }, []);
+
+  // 300ms Debounce for search input
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedQuery(searchInput);
-      setPage(1); // Reset to page 1 on new search query
+      setPage(1);
     }, 300);
 
     return () => clearTimeout(timer);
@@ -68,6 +90,7 @@ export function App() {
 
   // Fetch stats (total counts, categories, tags)
   const fetchStats = useCallback(async () => {
+    if (!isAuthenticated) return;
     try {
       const data = await getStatsApi();
       if (data.success) {
@@ -75,15 +98,17 @@ export function App() {
           total: data.total || 0,
           categories: data.categories || {},
           tags: data.tags || [],
+          maxUploads: data.maxUploads || 25,
         });
       }
     } catch (err) {
       console.warn('Failed to load stats:', err.message);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   // Fetch screenshots based on query, filters, and pagination
   const fetchScreenshots = useCallback(async () => {
+    if (!isAuthenticated) return;
     setIsLoading(true);
     try {
       const data = await searchScreenshotsApi({
@@ -103,21 +128,23 @@ export function App() {
       }
     } catch (err) {
       console.error('Error fetching screenshots:', err);
-      addToast('Search Error', err.message || 'Could not fetch screenshots', 'error');
+      if (err.message && !err.message.includes('Session expired')) {
+        addToast('Search Error', err.message || 'Could not fetch screenshots', 'error');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [debouncedQuery, selectedCategory, selectedTag, dateFrom, dateTo, page, addToast]);
+  }, [isAuthenticated, debouncedQuery, selectedCategory, selectedTag, dateFrom, dateTo, page, addToast]);
 
-  // Initial load
+  // Initial load when authenticated
   useEffect(() => {
-    fetchStats();
-  }, [fetchStats]);
-
-  // Load results whenever query, filters, or page changes
-  useEffect(() => {
-    fetchScreenshots();
-  }, [fetchScreenshots]);
+    if (isAuthenticated) {
+      fetchStats();
+      fetchScreenshots();
+    } else {
+      handleLogout();
+    }
+  }, [isAuthenticated, fetchStats, fetchScreenshots, handleLogout]);
 
   // Handlers
   const handleCategorySelect = (cat) => {
@@ -165,6 +192,18 @@ export function App() {
     }
   };
 
+  const handleUploadError = (errorMsg) => {
+    if (errorMsg.includes('limit') || errorMsg.includes('429')) {
+      addToast(
+        'Upload Cap Reached',
+        'You have reached your 25 screenshot limit. Delete existing screenshots to upload new ones.',
+        'error'
+      );
+    } else {
+      addToast('Upload Failed', errorMsg, 'error');
+    }
+  };
+
   const handleDeleteScreenshot = async (id) => {
     try {
       await deleteScreenshotApi(id);
@@ -181,6 +220,23 @@ export function App() {
     }
   };
 
+  // If initial auth check is resolving
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950">
+        <Loader2 className="w-8 h-8 text-brand-600 animate-spin mb-3" />
+        <p className="text-xs text-slate-400 font-medium tracking-wide uppercase">
+          Loading ishot vault...
+        </p>
+      </div>
+    );
+  }
+
+  // Protect main app: show login page if not authenticated
+  if (!isAuthenticated) {
+    return <AuthPage />;
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 transition-colors">
       {/* Top Navigation */}
@@ -188,6 +244,7 @@ export function App() {
         totalCount={stats.total}
         isUploadOpen={isUploadOpen}
         onToggleUpload={() => setIsUploadOpen(!isUploadOpen)}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1 pb-16">
@@ -196,6 +253,7 @@ export function App() {
           isOpen={isUploadOpen}
           onClose={() => setIsUploadOpen(false)}
           onUploadSuccess={handleUploadSuccess}
+          onUploadError={handleUploadError}
         />
 
         {/* Big Search Bar */}
